@@ -57,30 +57,34 @@ grouped_test <- test_df %>%
     date = as.Date(appt_time),
     weekday = substr(weekdays(appt_time, abbreviate = TRUE), 1, 3)
   )
+ 
+day_grouped <- grouped_test %>% 
+  group_by(date) %>% 
+  summarize(utilization = sum(utilization) / (8*4*5)) # 8 hours days with 15 minute timeslots for 5 providers
 
-print(grouped_test)
+print(day_grouped)
+
 # ==========================================================
 # ====================== UI ================================
 # ==========================================================
 
 ui <- fluidPage(
-  titlePanel("Clinic Weekly Appointment Dashboard"),
+  titlePanel("St. Thomas Community Health Center Overbooking Tool"),
   sidebarLayout(
     sidebarPanel(
       dateInput(
-        "week_start", "Select week start (Monday):",
+        "week_start", "Select Week Start Date",
         value = min(test_df$date, na.rm = TRUE),
         min = min(test_df$date, na.rm = TRUE),
         max = max(test_df$date, na.rm = TRUE)
       ),
       uiOutput("provider_select_ui"),
-      sliderInput("threshold", "Overbook threshold (attendance probability):", 
+      sliderInput("threshold", "Overbooking Threshold", 
                   min = 0, max = 1, value = 0.3, step = 0.01),
       actionButton("refresh", "Refresh view"),
       width = 3
     ),
     mainPanel(
-      p("Hover over blocks to see details. Green = high attendance probability; red = low."),
       plotlyOutput("week_plot", height = "700px"),
       hr(),
       plotlyOutput("eu_plot", height = "200px")
@@ -172,7 +176,8 @@ x_ticks <- (0:6) * slots_per_day + slots_per_day / 2
         fill = fill_color,
         text = paste0(
           "Provider: ", provider_id,
-          "<br>Slot start: ", format(slot_start, "%Y-%m-%d %H:%M"),
+          "<br>Appt date: ", format(slot_start, "%Y-%m-%d"),
+          "<br>Appt time: ", format(slot_start, "%H:%M"),
           "<br>Expected utilization: ", round(utilization, 2)
         )
       )
@@ -185,7 +190,7 @@ x_ticks <- (0:6) * slots_per_day + slots_per_day / 2
         labels = provs,              # provider IDs
         expand = c(0, 0)
       ) +
-      labs(x = "Day / Time", y = "Provider") +
+      labs(x = "", y = "Provider") +
       geom_segment(data = threshold_lines,
                    aes(
                      x = 0, xend = max(df_slot$xmax),
@@ -194,16 +199,41 @@ x_ticks <- (0:6) * slots_per_day + slots_per_day / 2
                    color = "black", linetype = "dashed", size = 0.4) +
       theme_minimal() +
       scale_x_continuous(
-        breaks = (0:6) * slots_per_day + slots_per_day / 2,  # center of each day
+        position = "top",
+        breaks = (0:6) * slots_per_day + slots_per_day / 2,
         labels = format(week_dates, "%a %d-%b"),
-        limits = c(0, 7 * slots_per_day),                     # full week range
+        limits = c(0, 7 * slots_per_day),
         expand = c(0, 0)
       ) +
       theme(
-        axis.text.x = element_text(hjust = -20)
+        axis.text.x.top = element_text(angle = 45, hjust = 0),
+        axis.title.x = element_blank(),
+        axis.ticks.x.top = element_line(),
+        legend.position = "none"
       )
-      
-    ggplotly(plt, tooltip = "text")
+    annotations <- lapply(1:nrow(day_grouped), function(i) {
+      list(
+        x = (i-1) * slots_per_day + slots_per_day/2,  # center of the day
+        y = -0.5,                                     # just below the heatmap (adjust as needed)
+        text = paste0("U: ", round(day_grouped$utilization[i], 2)),
+        showarrow = FALSE,
+        xanchor = "center",
+        yanchor = "top"
+      )
+    })
+    
+    ggp <- ggplotly(plt, tooltip = "text") %>%
+      layout(
+        xaxis = list(
+          side = "top",                   # move labels to top
+          tickvals = (0:6) * slots_per_day + slots_per_day / 2,
+          ticktext = format(week_dates, "%a %d-%b"),
+          annotations = annotations
+        ),
+        showlegend = FALSE
+      )
+    
+    ggp
   })
   
   
