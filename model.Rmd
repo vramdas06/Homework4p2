@@ -1,0 +1,107 @@
+---
+title: "Patient No-show Prediction Model"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+set.seed(10-27-25)
+
+library(tidyverse)
+library(randomForest)
+```
+
+# Create Model
+
+## Read in training and testing dataset
+```{r}
+train_file <- "train_dataset.csv.gz"
+test_file <- "test_dataset.csv.gz"
+
+train_raw <- read_csv(train_file, guess_max = 10000)
+test_raw <- read_csv(test_file, guess_max = 10000)
+```
+
+## Feature Engineering
+
+```{r}
+# Parse time
+train <- train_raw %>%
+mutate(
+appt_time = ymd_hms(appt_time, tz = "UTC"),
+appt_made = as_date(appt_made)
+)
+
+test <- test_raw %>%
+mutate(
+appt_time = ymd_hms(appt_time, tz = "UTC"),
+appt_made = as_date(appt_made)
+)
+
+# create lead_time_days, appt hour/day, weekend flag
+
+train <- train %>%
+mutate(
+lead_time_days = as.numeric(difftime(appt_time, appt_made, units = "days")),
+appt_hour = hour(appt_time),
+appt_wday = wday(appt_time, label = TRUE, week_start = 1), # Monday = 1
+is_weekend = if_else(appt_wday %in% c("Sat", "Sun"), 1, 0)
+)
+
+test <- test %>%
+mutate(
+lead_time_days = as.numeric(difftime(appt_time, appt_made, units = "days")),
+appt_hour = hour(appt_time),
+appt_wday = wday(appt_time, label = TRUE, week_start = 1),
+is_weekend = if_else(appt_wday %in% c("Sat", "Sun"), 1, 0)
+)
+
+# make no show categorical
+
+train$no_show <- as.factor(train$no_show)
+
+test$no_show <- as.factor(test$no_show)
+```
+
+## Train Model
+
+```{r}
+features <- c("age", "address", "specialty", "provider_id",
+"lead_time_days", "appt_hour", "is_weekend")
+
+formula <- as.formula(paste("no_show ~", paste(features, collapse = " + ")))
+
+rf_model <- randomForest(
+  formula,
+  data = train,
+  ntree = 200,
+  importance = TRUE
+)
+
+print(rf_model)
+```
+
+## Model Results
+
+```{r}
+# Class predictions
+rf_pred_class <- predict(rf_model, newdata = test, type = "response")
+
+# Class probabilities
+rf_pred_prob <- predict(rf_model, newdata = test, type = "prob")
+
+# True values
+actual <- test$no_show
+
+# Error rate = misclassified / total
+error_rate <- mean(rf_pred_class != actual)
+
+error_rate
+```
+
+## Save model for Shiny app
+
+```{r}
+saveRDS(rf_model, "fitted_model.rds")
+```
