@@ -43,13 +43,14 @@ test_df <- read_csv("test_dataset.csv.gz", show_col_types = FALSE) %>%
   preprocess_df() %>%
   mutate(
     no_show_prob = predict_no_show(.),
-    attendance_prob = 1 - no_show_prob,
+    attendance_prob = 1 - no_show_prob, # calculate expected attendance upfront
     date = as.Date(appt_time),
     weekday = substr(weekdays(appt_time, abbreviate = TRUE), 1, 3)
   )
 
+# --- Calculate the utilization for each provider + timeslot ---
 grouped_test <- test_df %>% 
-  group_by(provider_id, appt_time) %>% 
+  group_by(provider_id, specialty, appt_time) %>% 
   summarise(count = n(),
             utilization = 1 - prod(no_show_prob),
             .groups = "drop") %>% 
@@ -57,12 +58,7 @@ grouped_test <- test_df %>%
     date = as.Date(appt_time),
     weekday = substr(weekdays(appt_time, abbreviate = TRUE), 1, 3)
   )
- 
-day_grouped <- grouped_test %>% 
-  group_by(date) %>% 
-  summarize(utilization = sum(utilization) / (8*4*5)) # 8 hours days with 15 minute timeslots for 5 providers
 
-print(day_grouped)
 
 # ==========================================================
 # ====================== UI ================================
@@ -79,15 +75,14 @@ ui <- fluidPage(
         max = max(test_df$date, na.rm = TRUE)
       ),
       uiOutput("provider_select_ui"),
+      uiOutput("specialty_select_ui"),
       sliderInput("threshold", "Overbooking Threshold", 
                   min = 0, max = 1, value = 0.3, step = 0.01),
       actionButton("refresh", "Refresh view"),
       width = 3
     ),
     mainPanel(
-      plotlyOutput("week_plot", height = "700px"),
-      hr(),
-      plotlyOutput("eu_plot", height = "200px")
+      plotlyOutput("week_plot", height = "700px")
     )
   )
 )
@@ -105,27 +100,76 @@ server <- function(input, output, session) {
                 choices = c("All", provs), selected = "All", multiple = TRUE)
   })
   
-  # Reactive filtered week data
-  week_data <- eventReactive(list(input$refresh, input$week_start, input$providers), {
-    start_date <- as.Date(input$week_start)
-    end_date <- start_date + 6
-    df <- grouped_test %>%
-      filter(date >= start_date & date <= end_date)
-    
+  # Specialty selector
+  output$specialty_select_ui <- renderUI({
+    print(grouped_test)
+    specs <- sort(unique(grouped_test$specialty))
+    selectInput(
+      "specialties", "Specialties:", 
+      choices = c("All", specs), selected = "All", multiple = TRUE)
+  })
+  
+  # Reactive filtered week utilization data
+  week_data <- eventReactive(
+    list(input$refresh, input$week_start, input$providers, input$specialties),{
+      start_date <- as.Date(input$week_start)
+      end_date <- start_date + 6
+      df <- grouped_test %>%
+        filter(date >= start_date & date <= end_date) # filter for correct week
+      
+    # filter to specified providers
     if (!is.null(input$providers) && !("All" %in% input$providers)) {
       df <- df %>% filter(provider_id %in% input$providers)
+    }
+    
+    # filter to specified specialties
+    if (!is.null(input$specialties) && !("All" %in% input$specialties)) {
+      df <- df %>% filter(specialty %in% input$specialties)
     }
     
     df
   })
   
-  # Weekly visualization (Expected Utilization per time slot)
+  # Reactive filtered week aggregate data
+  daily_util_data <- eventReactive(list(input$refresh, input$week_start, input$providers, input$specialties), {
+    start_date <- as.Date(input$week_start)
+    end_date <- start_date + 6
+    df <- grouped_test %>%
+      filter(date >= start_date & date <= end_date) # filter for correct week
+
+    # filter to specified providers
+    if (!is.null(input$providers) && !("All" %in% input$providers)) {
+      df <- df %>% filter(provider_id %in% input$providers)
+    }
+    
+    # filter to specified specialties
+    if (!is.null(input$specialties) && !("All" %in% input$specialties)) {
+      df <- df %>% filter(specialty %in% input$specialties)
+    }
+    
+    # calculate daily utilization (only including specified providers)
+    df <- df %>% 
+      group_by(date) %>% 
+      summarize(providers = n_distinct(provider_id),
+                utilization = sum(utilization) / (8*4*providers)) # 8 hours days with 15 minute timeslots for x number of providers
+    
+    df
+  })
+  
+  # Bar visualization (Expected Utilization per time slot)
   output$week_plot <- renderPlotly({
     df <- week_data()
     if (nrow(df) == 0) {
-      return(ggplotly(ggplot() + ggtitle("No appointments in selected week") + theme_minimal()))
+      return(
+        ggplotly(
+          ggplot() + 
+            ggtitle("No appointments in selected week") + 
+            theme_minimal()))
     }
     
+    daily_df <- daily_util_data()
+    
+    # collect variables for plot labels and spacing
     slot_mins <- 15
     slots_per_day <- 24 * 60 / slot_mins
     provs <- df %>% arrange(provider_id) %>% distinct(provider_id) %>% pull(provider_id)
@@ -201,7 +245,11 @@ x_ticks <- (0:6) * slots_per_day + slots_per_day / 2
       scale_x_continuous(
         position = "top",
         breaks = (0:6) * slots_per_day + slots_per_day / 2,
-        labels = format(week_dates, "%a %d-%b"),
+        labels = paste0(
+          format(week_dates, "%a %d-%b"),
+          "<br>",
+          round(daily_df$utilization * 100), "%"
+        ),
         limits = c(0, 7 * slots_per_day),
         expand = c(0, 0)
       ) +
@@ -211,27 +259,36 @@ x_ticks <- (0:6) * slots_per_day + slots_per_day / 2
         axis.ticks.x.top = element_line(),
         legend.position = "none"
       )
-    annotations <- lapply(1:nrow(day_grouped), function(i) {
+    
+    annotations <- lapply(1:nrow(daily_df), function(i) {
       list(
-        x = (i-1) * slots_per_day + slots_per_day/2,  # center of the day
-        y = -0.5,                                     # just below the heatmap (adjust as needed)
-        text = paste0("U: ", round(day_grouped$utilization[i], 2)),
+        x = (i - 1) * slots_per_day + slots_per_day / 2,  # center under each day
+        y = -0.1,                                         # position below plot area
+        text = paste0(round(daily_df$utilization[i] * 100), "%"),
         showarrow = FALSE,
         xanchor = "center",
-        yanchor = "top"
+        yanchor = "top",
+        xref = "x",
+        yref = "paper",                                   # relative to the full plot height
+        font = list(size = 12)
       )
     })
     
     ggp <- ggplotly(plt, tooltip = "text") %>%
       layout(
         xaxis = list(
-          side = "top",                   # move labels to top
-          tickvals = (0:6) * slots_per_day + slots_per_day / 2,
-          ticktext = format(week_dates, "%a %d-%b"),
-          annotations = annotations
+          side = "top",
+          tickvals = ((0:6) + 0.5) * slots_per_day,
+          ticktext = paste0(
+            format(week_dates, "%a %d-%b"),
+            "<br>",
+            round(daily_df$utilization * 100), "%"
+          ),
+          tickmode = "array"
         ),
         showlegend = FALSE
       )
+    
     
     ggp
   })
