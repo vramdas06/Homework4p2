@@ -11,7 +11,8 @@ set.seed(10-27-25)
 library(tidyverse)
 library(randomForest)
 ```
-
+ *Note: Model and Shiny app information is in the bottom sections underneath Model Creation*
+ 
 # Create Model
 
 ## Read in training and testing dataset
@@ -87,9 +88,11 @@ print(rf_model)
 ```{r}
 # Class predictions
 rf_pred_class <- predict(rf_model, newdata = test, type = "response")
+head(rf_pred_class)
 
 # Class probabilities
 rf_pred_prob <- predict(rf_model, newdata = test, type = "prob")
+head(rf_pred_prob)
 
 # True values
 actual <- test$no_show
@@ -97,7 +100,9 @@ actual <- test$no_show
 # Error rate = misclassified / total
 error_rate <- mean(rf_pred_class != actual)
 
-error_rate
+print(paste("Overall error rate:", round(error_rate, 4)))
+
+print(paste("Overall error rate < .37:", error_rate < .37))
 ```
 
 ## Save model for Shiny app
@@ -105,3 +110,49 @@ error_rate
 ```{r}
 saveRDS(rf_model, "fitted_model.rds")
 ```
+
+# Model Information
+
+## Model Description
+
+My patient no-show prediction model uses a Random Forest classifier to predict whether a patient will be a "no-show" to their appointment based on patient and appointment characteristics. 
+
+Feature engineering was done to create the following variables:
+
+- lead_time_days: the number of days between when the appointment was made and when it occurs.
+
+- appt_hour: the hour integer of the scheduled appointment, extracted from the appointment time.
+
+- is_weekend: a binary flag  to indicate if the appointment was on a Saturday or Sunday.
+
+The predictors used in the model were: `age`, `address`, `specialty`, `provider_id`, `lead_time_days`, `appt_hour`, and `is_weekend.` The target variable `no_show` is binary, where 1 indicates a no-show and 0 indicates the patient attended the appointment. 
+
+The Random Forest classification model was trained on the training data with 200 trees using Gini impurity to determine the best splits. 
+
+---
+
+## Model Performance
+
+The model achieved an Out-of-Bag (OOB) error rate of 11.54%.
+
+Training confusion matrix (OOB):
+
+- Class 0 (show): error rate = 8.2%
+
+- Class 1 (no-show): error rate = 17.2%
+
+When evaluated on the test dataset, the model produced an overall error rate of approximately 0.1123. This meets the requirement that the overall error rate should be less than 0.37. For producing binary predictions, the model uses a 0.5 probability cutoff, meaning appointments with a predicted no-show probability above 50% are classified as no-shows.
+
+# Deviations From Proposed Design
+
+All major aspects of the tool remained consistent with the original design document. The minor changes that were made are summarized below:
+
+- Empty time slots were left blank in the Shiny app instead of being filled with a gray bar, as originally proposed. This adjustment was made to reduce visual clutter in the graphs.
+
+- The *Day of the Week* drop-down in the mock-up  was replaced with the *Select Week Start Date* input in the actual Shiny app. This change allows clinic staff to view a rolling seven-day period starting from any chosen date, offering greater flexibility and practical use than limiting the view to a specific day of the week.
+
+- Dates were added at the top of each column of bar graphs, in addition to the day-of-week labels. This provides extra clarity since the visualization can begin on any selected date.
+
+- The daily expected utilization percentage is displayed above each column of bars rather than below, as initially proposed. This change simplified implementation of the utlization measure into the app while maintaining readability.
+
+- In the hover tooltip, patient name was replaced with provider ID to align with the available data.

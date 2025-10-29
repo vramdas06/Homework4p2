@@ -175,14 +175,11 @@ server <- function(input, output, session) {
     provs <- df %>% arrange(provider_id) %>% distinct(provider_id) %>% pull(provider_id)
     df <- df %>% mutate(provider_fac = factor(provider_id, levels = provs))
 
-    # 1 Aggregate by provider + slot time (sum of attendance probs = expected utilization)
+    # Calculate slot start
     df_slot <- df %>%
-      mutate(slot_start = appt_time) #%>%
-      # group_by(provider_id, provider_fac, slot_start) %>%
-      # summarise(expected_utilization = sum(attendance_prob, na.rm = TRUE), .groups = "drop") %>%
-      # mutate(expected_utilization = pmin(expected_utilization, 1))  # cap at 100%
+      mutate(slot_start = appt_time) 
 
-    # 2️⃣ Map grid coordinates
+    # Map grid coordinates
     min_date <- min(as.Date(df$appt_time))
     row_height <- 0.8  # total height available per provider row
     threshold_lines <- data.frame(
@@ -191,12 +188,11 @@ server <- function(input, output, session) {
       ymax = as.numeric(provs) - row_height/2 + input$threshold * row_height
     )
     
+    # Create the 7 dates for the week using start date
+    week_dates <- seq(as.Date(input$week_start), by = "day", length.out = 7)
     
-# Create the 7 dates for the week
-week_dates <- seq(as.Date(input$week_start), by = "day", length.out = 7)
-
-# Compute x-axis positions (center of first slot of each day)
-x_ticks <- (0:6) * slots_per_day + slots_per_day / 2
+    # Compute x-axis positions (center of first slot of each day)
+    x_ticks <- (0:6) * slots_per_day + slots_per_day / 2
 
 
     df_slot <- df_slot %>%
@@ -211,37 +207,26 @@ x_ticks <- (0:6) * slots_per_day + slots_per_day / 2
       )
     y_centers <- as.numeric(provs)  # provider_fac indices
     
-    
-    
-    # 3️⃣ Plot
+    # Plot
     plt <- ggplot(df_slot) +
       geom_rect(aes(
         xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax,
-        fill = fill_color,
+        fill = fill_color, 
+        # Implement hover feature to see appointment details
         text = paste0(
           "Provider: ", provider_id,
           "<br>Appt date: ", format(slot_start, "%Y-%m-%d"),
           "<br>Appt time: ", format(slot_start, "%H:%M"),
-          "<br>Expected utilization: ", round(utilization, 2)
+          "<br>Expected utilization: ", paste(round(utilization, 2)*100, "%", sep = "")
+          )
         )
-      )
-     # color = "black", alpha = 0.9
-     ) +
-     # scale_fill_gradient(low = "red", high = "green", limits = c(0, 1), name = "Expected Utilization") +
+        ) +
       scale_fill_identity() +
       scale_y_continuous(
         breaks = y_centers,          # center labels on provider row
-        labels = provs,              # provider IDs
+        labels = provs,              # add provider ID y-axis labels
         expand = c(0, 0)
       ) +
-      labs(x = "", y = "Provider") +
-      geom_segment(data = threshold_lines,
-                   aes(
-                     x = 0, xend = max(df_slot$xmax),
-                     y = ymax, yend = ymax
-                   ),
-                   color = "black", linetype = "dashed", size = 0.4) +
-      theme_minimal() +
       scale_x_continuous(
         position = "top",
         breaks = (0:6) * slots_per_day + slots_per_day / 2,
@@ -252,27 +237,24 @@ x_ticks <- (0:6) * slots_per_day + slots_per_day / 2
         ),
         limits = c(0, 7 * slots_per_day),
         expand = c(0, 0)
-      ) +
+      ) + 
+      labs(x = "", y = "Provider") + # remove x axis label
+      geom_segment(
+        data = threshold_lines,
+        aes(
+          x = 0, xend = max(df_slot$xmax),
+          y = ymax, yend = ymax
+        ),
+        color = "black", 
+        linetype = "dashed", 
+        size = 0.4) +
+      theme_minimal() +
       theme(
         axis.text.x.top = element_text(angle = 45, hjust = 0),
         axis.title.x = element_blank(),
         axis.ticks.x.top = element_line(),
         legend.position = "none"
       )
-    
-    annotations <- lapply(1:nrow(daily_df), function(i) {
-      list(
-        x = (i - 1) * slots_per_day + slots_per_day / 2,  # center under each day
-        y = -0.1,                                         # position below plot area
-        text = paste0(round(daily_df$utilization[i] * 100), "%"),
-        showarrow = FALSE,
-        xanchor = "center",
-        yanchor = "top",
-        xref = "x",
-        yref = "paper",                                   # relative to the full plot height
-        font = list(size = 12)
-      )
-    })
     
     ggp <- ggplotly(plt, tooltip = "text") %>%
       layout(
@@ -288,30 +270,8 @@ x_ticks <- (0:6) * slots_per_day + slots_per_day / 2
         ),
         showlegend = FALSE
       )
-    
-    
     ggp
   })
-  
-  
-  # # Expected Utilization plot (sum of attendance probs per day)
-  # output$eu_plot <- renderPlotly({
-  #   df <- week_data()
-  #   if (nrow(df) == 0) {
-  #     return(ggplotly(ggplot() + ggtitle("No data for EU") + theme_minimal()))
-  #   }
-  #   
-  #   eu <- df %>%
-  #     group_by(date) %>%
-  #     summarise(EU = sum(attendance_prob, na.rm = TRUE))
-  #   
-  #   plt <- ggplot(eu, aes(x = date, y = EU, text = paste0("Date: ", date, "<br>Expected utilization: ", round(EU, 2)))) +
-  #     geom_col(fill = "steelblue") +
-  #     theme_minimal() +
-  #     labs(x = "Date", y = "Expected Attended Appointments")
-  #   
-  #   ggplotly(plt, tooltip = "text")
-  # })
 }
 
 # ==========================================================
